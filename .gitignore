@@ -7,5 +7,7 @@ venv/
 .env
 config.toml
 slotwatcher-state.json
+slotwatcher.log
+.ais-browser-profile/
 *.log
 .DS_Store
