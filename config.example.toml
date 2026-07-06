@@ -38,6 +38,7 @@ quiet_end = ""
 [state]
 state_file = "slotwatcher-state.json"
 log_file = "slotwatcher.log"
+auth_state_file = "ais-auth-state.json"
 
 [notify]
 # Easiest mobile push: install the ntfy app and subscribe to a secret topic,

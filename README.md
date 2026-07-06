@@ -80,3 +80,8 @@ Keep the machine awake. For always-on use, run it on a machine you control, such
 ## Safer defaults
 
 The default interval is 5 minutes with jitter and an hourly check cap. Lower intervals can create account or IP problems. This tool is intentionally notification-only; verify the slot on AIS before rescheduling manually.
+
+
+## Session persistence
+
+The login command saves cookies/localStorage to `ais-auth-state.json`. If checks say `login_required` immediately after login, delete `ais-auth-state.json`, run `python -m slotwatcher login --config config.toml` again, and make sure the appointment page itself is visible before pressing Enter.

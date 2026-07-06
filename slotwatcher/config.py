@@ -5,7 +5,10 @@ from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any
 import os
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 
 
 def _parse_date(value: str | date | None, *, default: date | None = None) -> date:
@@ -51,6 +54,7 @@ class WatchConfig:
     # State/logging
     state_file: Path = Path("slotwatcher-state.json")
     log_file: Path = Path("slotwatcher.log")
+    auth_state_file: Path = Path("ais-auth-state.json")
 
     # Notification config
     ntfy_topic: str | None = None
@@ -124,6 +128,7 @@ def load_config(path: str | Path) -> WatchConfig:
         quiet_end=_parse_time(_env("AIS_QUIET_END", polling.get("quiet_end"))),
         state_file=Path(_env("AIS_STATE_FILE", state.get("state_file", "slotwatcher-state.json"))),
         log_file=Path(_env("AIS_LOG_FILE", state.get("log_file", "slotwatcher.log"))),
+        auth_state_file=Path(_env("AIS_AUTH_STATE_FILE", state.get("auth_state_file", "ais-auth-state.json"))),
         ntfy_topic=_env("NTFY_TOPIC", notify.get("ntfy_topic")),
         ntfy_server=_env("NTFY_SERVER", notify.get("ntfy_server", "https://ntfy.sh")),
         telegram_bot_token=_env("TELEGRAM_BOT_TOKEN", notify.get("telegram_bot_token")),

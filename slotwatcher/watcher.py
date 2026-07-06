@@ -10,7 +10,7 @@ import time
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
-from playwright.sync_api import BrowserContext, Page, TimeoutError as PlaywrightTimeoutError, sync_playwright
+from playwright.sync_api import Browser, BrowserContext, Page, TimeoutError as PlaywrightTimeoutError, sync_playwright
 
 from .config import WatchConfig
 from .dates import extract_dates_from_json, extract_dates_from_text, filter_target_dates
@@ -423,30 +423,57 @@ def update_state_after_result(state: WatchState, result: CheckResult) -> None:
         state.consecutive_possible_blocks = 0
 
 
+
+def create_check_context(browser: Browser, config: WatchConfig) -> BrowserContext:
+    """Create a browser context for checks, preferring explicit saved auth state.
+
+    Persistent profiles are convenient, but some sites do not reliably restore the
+    logged-in session across separate launches. The login command now also writes
+    a Playwright storage-state file containing cookies and localStorage. Loading
+    that file here makes session reuse much more explicit and easier to debug.
+    """
+    kwargs: dict[str, Any] = {"viewport": {"width": 1280, "height": 900}}
+    if config.auth_state_file.exists():
+        kwargs["storage_state"] = str(config.auth_state_file)
+    return browser.new_context(**kwargs)
+
+
+def save_auth_state(context: BrowserContext, config: WatchConfig) -> None:
+    config.auth_state_file.parent.mkdir(parents=True, exist_ok=True)
+    context.storage_state(path=str(config.auth_state_file))
+    LOGGER.info("Saved AIS auth state to %s", config.auth_state_file)
+
+
 def run_login(config: WatchConfig) -> None:
     setup_logging(config.log_file)
     with sync_playwright() as p:
-        context = p.chromium.launch_persistent_context(
-            user_data_dir=str(config.profile_dir),
-            headless=False,
-            viewport={"width": 1280, "height": 900},
-        )
+        browser = p.chromium.launch(headless=False)
+        context = browser.new_context(viewport={"width": 1280, "height": 900})
         page = context.new_page()
         page.goto(config.appointment_url, wait_until="domcontentloaded", timeout=config.page_load_timeout_ms)
         print("Log in manually in the browser window. Navigate until the appointment page is visible.")
+        print("Important: after login, make sure the appointment page itself is visible, not just the dashboard.")
         input("Press Enter here after you are logged in and can see the appointment page...")
+        try:
+            page.goto(config.appointment_url, wait_until="domcontentloaded", timeout=config.page_load_timeout_ms)
+            page.wait_for_timeout(1_500)
+            if looks_login_required(page):
+                print("Warning: the page still looks logged out. The auth state was saved anyway, but the next check may ask you to log in again.")
+            else:
+                print("Login looks valid. Saving auth state.")
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: could not verify appointment page before saving auth state: {exc}")
+        save_auth_state(context, config)
         context.close()
+        browser.close()
 
 
 def run_once(config: WatchConfig, notifiers: list[Notifier] | None = None, *, notify: bool = False) -> CheckResult:
     setup_logging(config.log_file)
     state = WatchState.load(config.state_file)
     with sync_playwright() as p:
-        context = p.chromium.launch_persistent_context(
-            user_data_dir=str(config.profile_dir),
-            headless=config.headless,
-            viewport={"width": 1280, "height": 900},
-        )
+        browser = p.chromium.launch(headless=config.headless)
+        context = create_check_context(browser, config)
         page = context.new_page()
         try:
             result = check_once(page, config)
@@ -457,6 +484,7 @@ def run_once(config: WatchConfig, notifiers: list[Notifier] | None = None, *, no
             return result
         finally:
             context.close()
+            browser.close()
 
 
 def maybe_notify(config: WatchConfig, state: WatchState, result: CheckResult, notifiers: list[Notifier]) -> None:
@@ -483,11 +511,8 @@ def run_watch(config: WatchConfig, notifiers: list[Notifier]) -> None:
     state = WatchState.load(config.state_file)
 
     with sync_playwright() as p:
-        context: BrowserContext = p.chromium.launch_persistent_context(
-            user_data_dir=str(config.profile_dir),
-            headless=config.headless,
-            viewport={"width": 1280, "height": 900},
-        )
+        browser = p.chromium.launch(headless=config.headless)
+        context: BrowserContext = create_check_context(browser, config)
         page = context.new_page()
         try:
             while True:
@@ -520,3 +545,4 @@ def run_watch(config: WatchConfig, notifiers: list[Notifier]) -> None:
                 time.sleep(delay)
         finally:
             context.close()
+            browser.close()
