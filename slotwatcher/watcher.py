@@ -487,6 +487,26 @@ def run_once(config: WatchConfig, notifiers: list[Notifier] | None = None, *, no
             browser.close()
 
 
+def sleep_with_countdown(seconds: int) -> None:
+    """Sleep while updating the existing INFO-style countdown line."""
+    remaining = int(seconds)
+
+    while remaining > 0:
+        mins, secs = divmod(remaining, 60)
+
+        now = datetime.now()
+        line = (
+            f"{now.strftime('%Y-%m-%d %H:%M:%S')},{now.microsecond // 1000:03d} "
+            f"INFO slotwatcher: Next check in {mins:02d}:{secs:02d}."
+        )
+
+        print(f"\r{line}", end="", flush=True)
+        time.sleep(1)
+        remaining -= 1
+
+    print()
+
+
 def maybe_notify(config: WatchConfig, state: WatchState, result: CheckResult, notifiers: list[Notifier]) -> None:
     if result.status == "slot_found" and result.earliest:
         signature = slot_signature(result)
@@ -541,8 +561,7 @@ def run_watch(config: WatchConfig, notifiers: list[Notifier]) -> None:
                     state.save(config.state_file)
 
                 delay = compute_delay(config, state, result)
-                LOGGER.info("Next check in %s seconds.", delay)
-                time.sleep(delay)
+                sleep_with_countdown(delay)
         finally:
             context.close()
             browser.close()
