@@ -8,6 +8,7 @@ venv/
 config.toml
 slotwatcher-state.json
 slotwatcher.log
+ais-auth-state.json
 .ais-browser-profile/
 *.log
 .DS_Store
