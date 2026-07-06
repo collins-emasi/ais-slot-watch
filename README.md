@@ -32,12 +32,12 @@ latest_allowed_date = "2026-08-18"
 ### Easiest phone alerts with ntfy
 
 1. Install the ntfy app on your phone.
-2. Subscribe to a long, random topic, for example `ais-ke-7f4d2c-private-topic`.
+2. Subscribe to a long, random topic, for example `garden-moonlight-42`.
 3. Put that topic in `config.toml`:
 
 ```toml
 [notify]
-ntfy_topic = "ais-ke-7f4d2c-private-topic"
+ntfy_topic = "garden-moonlight-42"
 ```
 
 Then test:
