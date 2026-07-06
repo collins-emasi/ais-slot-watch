@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+.env
+config.toml
+slotwatcher-state.json
+*.log
+.DS_Store

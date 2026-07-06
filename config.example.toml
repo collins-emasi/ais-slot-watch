@@ -1,0 +1,58 @@
+[watch]
+# Paste your exact AIS appointment page URL here.
+appointment_url = "https://ais.usvisa-info.com/en-ke/niv/schedule/YOUR_SCHEDULE_ID/appointment?confirmed_limit_message=1&commit=Continue"
+
+# Use ISO dates. For an interview on 19 August 2026, enter 2026-08-19.
+current_appointment_date = "2026-08-19"
+
+# The monitor only alerts for dates in this window:
+# earliest_allowed_date <= detected_date < current_appointment_date.
+earliest_allowed_date = "2026-07-06"
+latest_allowed_date = "2026-08-18"
+
+# Optional. Leave blank unless the automatic facility detection fails.
+# The watcher can usually read this from the appointment page's location selector.
+facility_id = ""
+expedite = false
+
+[browser]
+# This profile stores your AIS session locally. Do not put your password in the script.
+profile_dir = ".ais-browser-profile"
+headless = false
+page_load_timeout_ms = 45000
+calendar_probe_timeout_ms = 8000
+
+[polling]
+# Default: 5 minutes, with random jitter. Use 90-180 seconds only if you accept
+# more frequent checks. The watcher also caps checks per hour and backs off.
+interval_seconds = 300
+min_interval_seconds = 90
+max_interval_seconds = 3600
+jitter_fraction = 0.25
+max_checks_per_hour = 18
+
+# Optional quiet hours in local machine time. Leave blank for 24/7 alerts.
+quiet_start = ""
+quiet_end = ""
+
+[state]
+state_file = "slotwatcher-state.json"
+log_file = "slotwatcher.log"
+
+[notify]
+# Easiest mobile push: install the ntfy app and subscribe to a secret topic,
+# then set the same topic here. Do not use personal info as the topic name.
+ntfy_topic = ""
+ntfy_server = "https://ntfy.sh"
+
+# Telegram option.
+telegram_bot_token = ""
+telegram_chat_id = ""
+
+# Email option. For Gmail/Google Workspace, use an app password or SMTP relay.
+email_to = ""
+email_from = ""
+smtp_host = ""
+smtp_port = 587
+smtp_user = ""
+smtp_password = ""
