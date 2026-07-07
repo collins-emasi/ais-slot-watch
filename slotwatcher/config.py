@@ -50,6 +50,13 @@ class WatchConfig:
     page_load_timeout_ms: int = 45_000
     calendar_probe_timeout_ms: int = 8_000
 
+    # AIS sign-in recovery. Passwords are read from env/keychain, not TOML.
+    auto_login: bool = False
+    login_email: str | None = None
+    login_password: str | None = None
+    keychain_service: str = "ais-slot-watch"
+    keychain_account: str | None = None
+
     # Polling behavior
     interval_seconds: int = 300
     min_interval_seconds: int = 90
@@ -103,6 +110,7 @@ def load_config(path: str | Path) -> WatchConfig:
 
     watch = raw.get("watch", {})
     browser = raw.get("browser", {})
+    auth = raw.get("auth", {})
     polling = raw.get("polling", {})
     notify = raw.get("notify", {})
     state = raw.get("state", {})
@@ -130,6 +138,11 @@ def load_config(path: str | Path) -> WatchConfig:
         headless=_parse_bool(_env("AIS_HEADLESS", browser.get("headless")), default=False),
         page_load_timeout_ms=int(_env("AIS_PAGE_LOAD_TIMEOUT_MS", browser.get("page_load_timeout_ms", 45_000))),
         calendar_probe_timeout_ms=int(_env("AIS_CALENDAR_PROBE_TIMEOUT_MS", browser.get("calendar_probe_timeout_ms", 8_000))),
+        auto_login=_parse_bool(_env("AIS_AUTO_LOGIN", auth.get("auto_login")), default=False),
+        login_email=_env("AIS_LOGIN_EMAIL", auth.get("login_email")),
+        login_password=_env("AIS_LOGIN_PASSWORD"),
+        keychain_service=_env("AIS_KEYCHAIN_SERVICE", auth.get("keychain_service", "ais-slot-watch")),
+        keychain_account=_env("AIS_KEYCHAIN_ACCOUNT", auth.get("keychain_account")),
         interval_seconds=int(_env("AIS_INTERVAL_SECONDS", polling.get("interval_seconds", 300))),
         min_interval_seconds=int(_env("AIS_MIN_INTERVAL_SECONDS", polling.get("min_interval_seconds", 90))),
         max_interval_seconds=int(_env("AIS_MAX_INTERVAL_SECONDS", polling.get("max_interval_seconds", 3600))),

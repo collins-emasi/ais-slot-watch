@@ -7,6 +7,7 @@ import shutil
 import sys
 
 from .config import load_config
+from .credentials import prompt_and_store_password
 from .notify import Alert, build_notifiers, notify_all
 from .watcher import run_login, run_once, run_watch
 
@@ -46,9 +47,10 @@ def print_notification_channels(notifiers) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Notification-only AIS U.S. visa slot watcher")
-    parser.add_argument("command", choices=["init", "login", "once", "watch", "test-notify"])
+    parser.add_argument("command", choices=["init", "login", "store-password", "once", "watch", "test-notify"])
     parser.add_argument("--config", default="config.toml", help="Path to TOML config file")
     parser.add_argument("--send", action="store_true", help="For 'once', send notifications if a slot is found")
+    parser.add_argument("--email", help="AIS account email for 'store-password'")
     args = parser.parse_args(argv)
 
     if args.command == "init":
@@ -60,6 +62,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "login":
         run_login(config)
+        return 0
+
+    if args.command == "store-password":
+        account = prompt_and_store_password(config, email=args.email)
+        print(f"Stored AIS password in macOS Keychain for {account}.")
         return 0
 
     if args.command == "once":

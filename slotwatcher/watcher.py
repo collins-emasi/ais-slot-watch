@@ -13,6 +13,7 @@ from urllib.parse import urlparse, urlunparse
 from playwright.sync_api import Browser, BrowserContext, Page, TimeoutError as PlaywrightTimeoutError, sync_playwright
 
 from .config import WatchConfig
+from .credentials import load_login_credentials
 from .dates import extract_dates_from_json, extract_dates_from_text, filter_target_dates
 from .notify import Alert, Notifier, notify_all
 from .state import WatchState, parse_iso_datetime
@@ -42,6 +43,52 @@ NO_SLOT_PATTERNS = (
     "there are no available appointments",
     "no appointments available",
     "no available appointments at the selected location",
+)
+
+INTERACTIVE_LOGIN_PATTERNS = (
+    "captcha",
+    "verification code",
+    "two-factor",
+    "two factor",
+    "multi-factor",
+    "multi factor",
+    "one-time password",
+    "one time password",
+    "authenticator",
+)
+
+EMAIL_SELECTORS = (
+    "#user_email",
+    'input[name="user[email]"]',
+    'input[type="email"]',
+    'input[name*="email"]',
+    'input[id*="email"]',
+)
+
+PASSWORD_SELECTORS = (
+    "#user_password",
+    'input[name="user[password]"]',
+    'input[type="password"]',
+    'input[name*="password"]',
+    'input[id*="password"]',
+)
+
+POLICY_CHECKBOX_SELECTORS = (
+    "#policy_confirmed",
+    'input[name*="policy"][type="checkbox"]',
+    'input[id*="policy"][type="checkbox"]',
+    'input[name*="privacy"][type="checkbox"]',
+    'input[id*="privacy"][type="checkbox"]',
+    'input[name*="terms"][type="checkbox"]',
+    'input[id*="terms"][type="checkbox"]',
+)
+
+SUBMIT_SELECTORS = (
+    'input[type="submit"]',
+    'button[type="submit"]',
+    'button:has-text("Sign In")',
+    'button:has-text("Sign in")',
+    'input[value*="Sign"]',
 )
 
 TIME_RE = re.compile(r"\b([01]?\d|2[0-3]):[0-5]\d\b")
@@ -97,9 +144,91 @@ def looks_login_required(page: Page) -> bool:
     return any(pattern in body for pattern in LOGIN_PATTERNS)
 
 
+def looks_interactive_login_challenge(page: Page) -> bool:
+    body = text_lower(page)
+    return any(pattern in body for pattern in INTERACTIVE_LOGIN_PATTERNS)
+
+
 def looks_blocked(page: Page, extra_text: str = "") -> bool:
     body = (text_lower(page) + "\n" + extra_text.lower())[:80_000]
     return any(pattern in body for pattern in BLOCK_PATTERNS)
+
+
+def first_locator(page: Page, selectors: tuple[str, ...]) -> Any | None:
+    for selector in selectors:
+        try:
+            locator = page.locator(selector).first
+            if locator.count() > 0:
+                return locator
+        except Exception:
+            continue
+    return None
+
+
+def check_policy_boxes(page: Page) -> None:
+    for selector in POLICY_CHECKBOX_SELECTORS:
+        try:
+            boxes = page.locator(selector)
+            count = min(boxes.count(), 5)
+            for idx in range(count):
+                box = boxes.nth(idx)
+                try:
+                    if box.is_visible(timeout=500) and box.is_enabled(timeout=500) and not box.is_checked(timeout=500):
+                        box.check(timeout=1_500, force=True)
+                except Exception:
+                    continue
+        except Exception:
+            continue
+
+
+def attempt_auto_login(page: Page, context: BrowserContext, config: WatchConfig) -> tuple[bool, list[str]]:
+    if not config.auto_login:
+        return False, ["Auto-login is disabled."]
+
+    notes: list[str] = []
+    if looks_interactive_login_challenge(page):
+        return False, ["AIS sign-in appears to require an interactive challenge; automatic login will not bypass it."]
+
+    credentials, credential_notes = load_login_credentials(config)
+    notes.extend(credential_notes)
+    if not credentials:
+        return False, notes
+
+    email_field = first_locator(page, EMAIL_SELECTORS)
+    password_field = first_locator(page, PASSWORD_SELECTORS)
+    if email_field is None or password_field is None:
+        return False, notes + ["Could not find AIS email/password fields for automatic login."]
+
+    try:
+        LOGGER.info("AIS session expired; attempting automatic sign-in for %s.", credentials.email)
+        email_field.fill(credentials.email, timeout=5_000)
+        password_field.fill(credentials.password, timeout=5_000)
+        check_policy_boxes(page)
+
+        submit = first_locator(page, SUBMIT_SELECTORS)
+        if submit is not None:
+            submit.click(timeout=5_000)
+        else:
+            password_field.press("Enter", timeout=5_000)
+
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=config.page_load_timeout_ms)
+        except Exception:
+            pass
+        page.wait_for_timeout(2_000)
+
+        if looks_interactive_login_challenge(page):
+            return False, notes + ["AIS sign-in requires an interactive challenge after password submission."]
+
+        page.goto(config.appointment_url, wait_until="domcontentloaded", timeout=config.page_load_timeout_ms)
+        page.wait_for_timeout(1_500)
+        if looks_login_required(page):
+            return False, notes + ["Automatic login submitted credentials, but AIS still shows the sign-in page."]
+
+        save_auth_state(context, config)
+        return True, notes + ["Automatic login refreshed the AIS session."]
+    except Exception as exc:  # noqa: BLE001
+        return False, notes + [f"Automatic login failed: {exc}"]
 
 
 def discover_facility_ids(page: Page, configured_facility_id: str | None = None) -> list[str]:
@@ -477,6 +606,21 @@ def save_auth_state(context: BrowserContext, config: WatchConfig) -> None:
     LOGGER.info("Saved AIS auth state to %s", config.auth_state_file)
 
 
+def check_once_with_session_recovery(page: Page, context: BrowserContext, config: WatchConfig) -> CheckResult:
+    result = check_once(page, config)
+    if result.status != "login_required":
+        return result
+
+    recovered, notes = attempt_auto_login(page, context, config)
+    if not recovered:
+        result.notes.extend(notes)
+        return result
+
+    refreshed = check_once(page, config)
+    refreshed.notes = notes + refreshed.notes
+    return refreshed
+
+
 def run_login(config: WatchConfig) -> None:
     setup_logging(config.log_file)
     with sync_playwright() as p:
@@ -509,7 +653,7 @@ def run_once(config: WatchConfig, notifiers: list[Notifier] | None = None, *, no
         context = create_check_context(browser, config)
         page = context.new_page()
         try:
-            result = check_once(page, config)
+            result = check_once_with_session_recovery(page, context, config)
             update_state_after_result(state, result)
             if notify and notifiers:
                 maybe_notify(config, state, result, notifiers)
@@ -614,7 +758,7 @@ def run_watch(config: WatchConfig, notifiers: list[Notifier]) -> None:
 
                 try:
                     state.clear_next_check()
-                    result = check_once(page, config)
+                    result = check_once_with_session_recovery(page, context, config)
                     LOGGER.info(
                         "status=%s earliest=%s candidates=%s sources=%s notes=%s",
                         result.status,
@@ -635,15 +779,19 @@ def run_watch(config: WatchConfig, notifiers: list[Notifier]) -> None:
                         state.clear_next_check()
                         state.save(config.state_file)
 
+                        body = (
+                            "AIS slot watcher stopped because your login session expired.\n\n"
+                            "Action needed:\n"
+                            "1. Run: python -m slotwatcher login --config config.toml\n"
+                            "2. Log in manually and open the appointment page\n"
+                            "3. Restart: python -m slotwatcher watch --config config.toml"
+                        )
+                        if result.notes:
+                            body += "\n\nNotes:\n" + "\n".join(f"- {note}" for note in result.notes[:6])
+
                         alert = Alert(
                             title="AIS watcher stopped: login required",
-                            body=(
-                                "AIS slot watcher stopped because your login session expired.\n\n"
-                                "Action needed:\n"
-                                "1. Run: python -m slotwatcher login --config config.toml\n"
-                                "2. Log in manually and open the appointment page\n"
-                                "3. Restart: python -m slotwatcher watch --config config.toml"
-                            ),
+                            body=body,
                             url=config.appointment_url,
                             tags=("warning", "lock"),
                             priority="high",

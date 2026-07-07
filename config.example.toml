@@ -22,6 +22,19 @@ headless = false
 page_load_timeout_ms = 45000
 calendar_probe_timeout_ms = 8000
 
+[auth]
+# Optional session recovery. When enabled, the watcher can log back into your
+# own AIS account after the server session expires. It will not bypass CAPTCHA,
+# OTP, or other interactive challenges.
+auto_login = false
+login_email = ""
+
+# Passwords are read from AIS_LOGIN_PASSWORD or macOS Keychain, not this file.
+# To store it in Keychain:
+# python -m slotwatcher store-password --config config.toml --email you@example.com
+keychain_service = "ais-slot-watch"
+keychain_account = ""
+
 [polling]
 # Default: 5 minutes, with random jitter. Use 90-180 seconds only if you accept
 # more frequent checks. The watcher also caps checks per hour and backs off.
