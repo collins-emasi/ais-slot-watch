@@ -2,7 +2,7 @@
 
 Notification-only watcher for earlier U.S. visa appointment slots on AIS/Yatri appointment pages.
 
-It opens AIS with a local Playwright browser profile, reuses your own login session, checks for available calendar dates in your target window, and sends a push/email alert. It does **not** store your AIS password, solve CAPTCHA, bypass rate limits, or reschedule for you.
+It opens AIS with a local Playwright browser profile, reuses your own login session, checks for available calendar dates in your target window, and sends a desktop, push, or email alert. It does **not** store your AIS password, solve CAPTCHA, bypass rate limits, or reschedule for you.
 
 ## Install
 
@@ -28,6 +28,26 @@ current_appointment_date = "2026-08-19"
 earliest_allowed_date = "2026-07-06"
 latest_allowed_date = "2026-08-18"
 ```
+
+### Laptop alerts on macOS
+
+Desktop notifications are enabled by default when the watcher runs on your Mac:
+
+```toml
+[notify]
+desktop_notifications = true
+desktop_sound = "Glass"
+```
+
+Then test:
+
+```bash
+python -m slotwatcher test-notify --config config.toml
+```
+
+macOS may ask whether Terminal, your Python app, or Script Editor can send notifications. Allow it in System Settings so future slot alerts appear like normal app notifications.
+
+For the nicest Mac experience, install `terminal-notifier` separately. When it is available, slot alerts can open the AIS appointment page when you click the notification. Without it, the watcher falls back to macOS's built-in notification command.
 
 ### Easiest phone alerts with ntfy
 
@@ -75,7 +95,7 @@ Keep the machine awake. For always-on use, run it on a machine you control, such
 - Visible page fallback if the endpoint changes.
 - Deduplicated alerts, so the same date does not spam you.
 - Adaptive backoff for login expiry, possible blocks, repeated failures, and hourly check caps.
-- Pluggable notifiers: console, ntfy, Telegram, email SMTP.
+- Pluggable notifiers: console, desktop, ntfy, Telegram, email SMTP.
 
 ## Safer defaults
 

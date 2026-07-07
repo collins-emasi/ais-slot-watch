@@ -27,6 +27,14 @@ def _parse_time(value: str | None) -> time | None:
     return datetime.strptime(value, "%H:%M").time()
 
 
+def _parse_bool(value: Any, *, default: bool = False) -> bool:
+    if value in (None, ""):
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("true", "1", "yes", "on")
+
+
 @dataclass(frozen=True)
 class WatchConfig:
     appointment_url: str
@@ -57,6 +65,8 @@ class WatchConfig:
     auth_state_file: Path = Path("ais-auth-state.json")
 
     # Notification config
+    desktop_notifications: bool = True
+    desktop_sound: str | None = "Glass"
     ntfy_topic: str | None = None
     ntfy_server: str = "https://ntfy.sh"
     telegram_bot_token: str | None = None
@@ -73,7 +83,8 @@ class WatchConfig:
 
     def notification_enabled(self) -> bool:
         return bool(
-            self.ntfy_topic
+            self.desktop_notifications
+            or self.ntfy_topic
             or (self.telegram_bot_token and self.telegram_chat_id)
             or (self.email_to and self.smtp_host and self.email_from)
         )
@@ -114,9 +125,9 @@ def load_config(path: str | Path) -> WatchConfig:
         earliest_allowed_date=earliest,
         latest_allowed_date=latest,
         facility_id=_env("AIS_FACILITY_ID", watch.get("facility_id")),
-        expedite=bool(_env("AIS_EXPEDITE", watch.get("expedite", False)) in (True, "true", "1", "yes", "on")),
+        expedite=_parse_bool(_env("AIS_EXPEDITE", watch.get("expedite")), default=False),
         profile_dir=Path(_env("AIS_PROFILE_DIR", browser.get("profile_dir", ".ais-browser-profile"))),
-        headless=bool(_env("AIS_HEADLESS", browser.get("headless", False)) in (True, "true", "1", "yes", "on")),
+        headless=_parse_bool(_env("AIS_HEADLESS", browser.get("headless")), default=False),
         page_load_timeout_ms=int(_env("AIS_PAGE_LOAD_TIMEOUT_MS", browser.get("page_load_timeout_ms", 45_000))),
         calendar_probe_timeout_ms=int(_env("AIS_CALENDAR_PROBE_TIMEOUT_MS", browser.get("calendar_probe_timeout_ms", 8_000))),
         interval_seconds=int(_env("AIS_INTERVAL_SECONDS", polling.get("interval_seconds", 300))),
@@ -129,6 +140,8 @@ def load_config(path: str | Path) -> WatchConfig:
         state_file=Path(_env("AIS_STATE_FILE", state.get("state_file", "slotwatcher-state.json"))),
         log_file=Path(_env("AIS_LOG_FILE", state.get("log_file", "slotwatcher.log"))),
         auth_state_file=Path(_env("AIS_AUTH_STATE_FILE", state.get("auth_state_file", "ais-auth-state.json"))),
+        desktop_notifications=_parse_bool(_env("DESKTOP_NOTIFICATIONS", notify.get("desktop_notifications")), default=True),
+        desktop_sound=_env("DESKTOP_SOUND", notify.get("desktop_sound", "Glass")) or None,
         ntfy_topic=_env("NTFY_TOPIC", notify.get("ntfy_topic")),
         ntfy_server=_env("NTFY_SERVER", notify.get("ntfy_server", "https://ntfy.sh")),
         telegram_bot_token=_env("TELEGRAM_BOT_TOKEN", notify.get("telegram_bot_token")),

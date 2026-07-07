@@ -41,6 +41,11 @@ log_file = "slotwatcher.log"
 auth_state_file = "ais-auth-state.json"
 
 [notify]
+# Laptop/desktop notifications. Enabled by default on macOS when you run the
+# watcher locally. Set to false if this runs on a server or you only want phone/email alerts.
+desktop_notifications = true
+desktop_sound = "Glass"
+
 # Easiest mobile push: install the ntfy app and subscribe to a secret topic,
 # then set the same topic here. Do not use personal info as the topic name.
 ntfy_topic = ""

@@ -36,6 +36,14 @@ def print_result(result) -> None:
             print(f"- {note}")
 
 
+def print_notification_channels(notifiers) -> None:
+    channels = [notifier.name for notifier in notifiers if notifier.name != "console"]
+    if channels:
+        print("Notification channels:", ", ".join(channels))
+    else:
+        print("No desktop/push/email notifier is active; console logging only.")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Notification-only AIS U.S. visa slot watcher")
     parser.add_argument("command", choices=["init", "login", "once", "watch", "test-notify"])
@@ -65,12 +73,12 @@ def main(argv: list[str] | None = None) -> int:
             f"{config.earliest_allowed_date.isoformat()} through "
             f"{config.current_appointment_date.isoformat()} (exclusive of current appointment)."
         )
-        if not config.notification_enabled():
-            print("No push/email notifier configured; console logging only.")
+        print_notification_channels(notifiers)
         run_watch(config, notifiers)
         return 0
 
     if args.command == "test-notify":
+        print_notification_channels(notifiers)
         failures = notify_all(
             notifiers,
             Alert(

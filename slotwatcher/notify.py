@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from email.message import EmailMessage
+import hashlib
+import platform
+import re
+import shutil
 import smtplib
+import subprocess
 from typing import Protocol
 
 import requests
@@ -37,6 +42,109 @@ class ConsoleNotifier:
         if alert.url:
             print(alert.url)
         print("=" * 72 + "\n")
+
+
+def _compact_body(body: str, *, limit: int = 260) -> str:
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    text = " | ".join(lines[:4]) if lines else body.strip()
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "..."
+
+
+def _run_notification_command(command: list[str]) -> None:
+    try:
+        subprocess.run(
+            command,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+        )
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or "").strip()
+        suffix = f": {detail}" if detail else ""
+        raise RuntimeError(f"{command[0]} failed{suffix}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"{command[0]} timed out") from exc
+
+
+def _apple_script_string(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+@dataclass
+class DesktopNotifier:
+    sound: str | None = "Glass"
+    app_name: str = "AIS Slot Watcher"
+    name: str = "desktop"
+
+    @staticmethod
+    def is_supported() -> bool:
+        system = platform.system()
+        if system == "Darwin":
+            return bool(shutil.which("terminal-notifier") or shutil.which("osascript"))
+        if system == "Linux":
+            return bool(shutil.which("notify-send"))
+        return False
+
+    def send(self, alert: Alert) -> None:
+        message = _compact_body(alert.body)
+        system = platform.system()
+        if system == "Darwin":
+            self._send_macos(alert, message)
+            return
+        if system == "Linux":
+            self._send_linux(alert, message)
+            return
+        raise RuntimeError(f"desktop notifications are not supported on {system or 'this platform'}")
+
+    def _send_macos(self, alert: Alert, message: str) -> None:
+        terminal_notifier = shutil.which("terminal-notifier")
+        if terminal_notifier:
+            group = hashlib.sha1(f"{alert.title}:{alert.url or ''}".encode("utf-8")).hexdigest()[:16]
+            command = [
+                terminal_notifier,
+                "-title",
+                self.app_name,
+                "-subtitle",
+                alert.title,
+                "-message",
+                message,
+                "-group",
+                group,
+            ]
+            if self.sound:
+                command.extend(["-sound", self.sound])
+            if alert.url:
+                command.extend(["-open", alert.url])
+            _run_notification_command(command)
+            return
+
+        osascript = shutil.which("osascript")
+        if not osascript:
+            raise RuntimeError("osascript is not available")
+
+        script = (
+            f"display notification {_apple_script_string(message)} "
+            f"with title {_apple_script_string(alert.title)}"
+        )
+        if alert.url:
+            script += f" subtitle {_apple_script_string('Open AIS from the watcher output')}"
+        if self.sound:
+            script += f" sound name {_apple_script_string(self.sound)}"
+        _run_notification_command([osascript, "-e", script])
+
+    def _send_linux(self, alert: Alert, message: str) -> None:
+        notify_send = shutil.which("notify-send")
+        if not notify_send:
+            raise RuntimeError("notify-send is not available")
+        urgency = "critical" if alert.priority in {"high", "urgent"} else "normal"
+        command = [notify_send, "--app-name", self.app_name, "--urgency", urgency, alert.title, message]
+        _run_notification_command(command)
 
 
 @dataclass
@@ -105,6 +213,9 @@ class EmailNotifier:
 
 def build_notifiers(config: WatchConfig) -> list[Notifier]:
     notifiers: list[Notifier] = [ConsoleNotifier()]
+
+    if config.desktop_notifications and DesktopNotifier.is_supported():
+        notifiers.append(DesktopNotifier(sound=config.desktop_sound))
 
     if config.ntfy_topic:
         notifiers.append(NtfyNotifier(topic=config.ntfy_topic, server=config.ntfy_server))
