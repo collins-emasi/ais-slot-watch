@@ -264,8 +264,14 @@ def check_once(page: Page, config: WatchConfig) -> CheckResult:
             return CheckResult(status="login_required", notes=["AIS login is required or the saved session expired."])
 
         api_dates, times_by_date, facility_ids, api_notes, api_blocked = probe_ais_calendar_api(page, config)
-        prime_visible_calendar(page)
-        page.wait_for_timeout(2_000)
+
+        # Only click/open the visible calendar if the direct calendar API did not work.
+        # This avoids duplicate /days/<facility>.json requests on every check.
+        if not api_dates:
+            prime_visible_calendar(page)
+            page.wait_for_timeout(2_000)
+        else:
+            page.wait_for_timeout(500)
 
         visible_text = page.locator("body").inner_text(timeout=5_000)
         text_dates = extract_dates_from_text(visible_text)
@@ -480,6 +486,8 @@ def run_once(config: WatchConfig, notifiers: list[Notifier] | None = None, *, no
             update_state_after_result(state, result)
             if notify and notifiers:
                 maybe_notify(config, state, result, notifiers)
+                if result.status in {"no_slot", "slot_found"}:
+                    context.storage_state(path=str(config.auth_state_file))
             state.save(config.state_file)
             return result
         finally:
@@ -548,7 +556,38 @@ def run_watch(config: WatchConfig, notifiers: list[Notifier]) -> None:
                     )
                     update_state_after_result(state, result)
                     maybe_notify(config, state, result, notifiers)
+
+                    if result.status in {"no_slot", "slot_found"}:
+                        context.storage_state(path=str(config.auth_state_file))
+
                     state.save(config.state_file)
+                    if result.status == "login_required":
+                        LOGGER.warning("AIS session expired. Notifying user and stopping watcher.")
+
+                        alert = Alert(
+                            title="AIS watcher stopped: login required",
+                            body=(
+                                "AIS slot watcher stopped because your login session expired.\n\n"
+                                "Action needed:\n"
+                                "1. Run: python -m slotwatcher login --config config.toml\n"
+                                "2. Log in manually and open the appointment page\n"
+                                "3. Restart: python -m slotwatcher watch --config config.toml"
+                            ),
+                            url=config.appointment_url,
+                            tags=("warning", "lock"),
+                            priority="high",
+                        )
+
+                        failures = notify_all(notifiers, alert)
+
+                        if failures:
+                            LOGGER.warning("Notification failures while reporting login expiry: %s", failures)
+                            print("Notification failures while reporting login expiry:")
+                            for failure in failures:
+                                print(f"- {failure}")
+
+                        return
+
                 except PlaywrightTimeoutError as exc:
                     result = CheckResult(status="error", notes=[f"Page load timed out: {exc}"])
                     update_state_after_result(state, result)
