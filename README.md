@@ -88,12 +88,16 @@ python -m slotwatcher watch --config config.toml
 
 Keep the machine awake. For always-on use, run it on a machine you control, such as a home server, a small VPS with a desktop session, or your laptop with sleep disabled.
 
+The watcher persists its next scheduled check in the state file. If you stop it during a countdown and start it again, it resumes that countdown instead of immediately spending another AIS request. If the saved time has already passed, it checks right away.
+
 ## Design notes
 
 - Browser session, not stored credentials.
 - Calendar JSON endpoint probing when the page exposes a facility id.
 - Visible page fallback if the endpoint changes.
 - Deduplicated alerts, so the same date does not spam you.
+- Restart-safe countdowns, so stopping and starting the watcher preserves the next scheduled check.
+- Exact rolling hourly check caps instead of a blunt one-hour delay whenever the cap is reached.
 - Adaptive backoff for login expiry, possible blocks, repeated failures, and hourly check caps.
 - Pluggable notifiers: console, desktop, ntfy, Telegram, email SMTP.
 

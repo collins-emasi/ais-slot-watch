@@ -15,7 +15,7 @@ from playwright.sync_api import Browser, BrowserContext, Page, TimeoutError as P
 from .config import WatchConfig
 from .dates import extract_dates_from_json, extract_dates_from_text, filter_target_dates
 from .notify import Alert, Notifier, notify_all
-from .state import WatchState
+from .state import WatchState, parse_iso_datetime
 
 LOGGER = logging.getLogger("slotwatcher")
 
@@ -235,6 +235,7 @@ def prime_visible_calendar(page: Page) -> None:
 def check_once(page: Page, config: WatchConfig) -> CheckResult:
     network_dates: set[date] = set()
     network_notes: list[str] = []
+    network_note_keys: set[str] = set()
 
     def record_response(response: Any) -> None:
         url = getattr(response, "url", "").lower()
@@ -251,7 +252,10 @@ def check_once(page: Page, config: WatchConfig) -> CheckResult:
             found = extract_dates_from_json(payload)
             if found:
                 network_dates.update(found)
-                network_notes.append(f"Network response yielded {len(found)} date(s): {response.url}")
+                note_key = f"{len(found)}:{response.url}"
+                if note_key not in network_note_keys:
+                    network_note_keys.add(note_key)
+                    network_notes.append(f"Network response yielded {len(found)} date(s): {response.url}")
         except Exception:
             return
 
@@ -393,15 +397,27 @@ def seconds_until_quiet_ends(config: WatchConfig, now: datetime | None = None) -
     return max(60, int((end_dt - now).total_seconds()))
 
 
+def format_duration(seconds: int) -> str:
+    seconds = max(0, int(seconds))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m {secs:02d}s"
+    return f"{minutes}m {secs:02d}s"
+
+
+def format_scheduled_time(value: str | None) -> str:
+    scheduled = parse_iso_datetime(value)
+    if not scheduled:
+        return "unknown"
+    return scheduled.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
 def compute_delay(config: WatchConfig, state: WatchState, result: CheckResult) -> int:
     if in_quiet_hours(config):
         return seconds_until_quiet_ends(config)
 
     base = config.interval_seconds
-
-    if state.checks_in_last_hour() >= config.max_checks_per_hour:
-        LOGGER.info("Reached max_checks_per_hour=%s; backing off for courtesy.", config.max_checks_per_hour)
-        base = max(base, 3600)
 
     if result.status == "possible_block":
         base = max(base, min(config.max_interval_seconds, 1800 * max(1, state.consecutive_possible_blocks)))
@@ -412,7 +428,18 @@ def compute_delay(config: WatchConfig, state: WatchState, result: CheckResult) -
 
     base = max(config.min_interval_seconds, min(config.max_interval_seconds, base))
     jitter = base * config.jitter_fraction
-    return int(max(config.min_interval_seconds, min(config.max_interval_seconds, random.uniform(base - jitter, base + jitter))))
+    delay = int(max(config.min_interval_seconds, min(config.max_interval_seconds, random.uniform(base - jitter, base + jitter))))
+
+    rate_limit_delay = state.seconds_until_next_check_slot(config.max_checks_per_hour)
+    if rate_limit_delay > delay:
+        LOGGER.info(
+            "Reached max_checks_per_hour=%s; next allowed check in %s.",
+            config.max_checks_per_hour,
+            format_duration(rate_limit_delay),
+        )
+        delay = rate_limit_delay
+
+    return delay
 
 
 def update_state_after_result(state: WatchState, result: CheckResult) -> None:
@@ -499,20 +526,53 @@ def sleep_with_countdown(seconds: int) -> None:
     """Sleep while updating the existing INFO-style countdown line."""
     remaining = int(seconds)
 
-    while remaining > 0:
-        mins, secs = divmod(remaining, 60)
+    try:
+        while remaining > 0:
+            mins, secs = divmod(remaining, 60)
 
-        now = datetime.now()
-        line = (
-            f"{now.strftime('%Y-%m-%d %H:%M:%S')},{now.microsecond // 1000:03d} "
-            f"INFO slotwatcher: Next check in {mins:02d}:{secs:02d}."
-        )
+            now = datetime.now()
+            line = (
+                f"{now.strftime('%Y-%m-%d %H:%M:%S')},{now.microsecond // 1000:03d} "
+                f"INFO slotwatcher: Next check in {mins:02d}:{secs:02d}."
+            )
 
-        print(f"\r{line}", end="", flush=True)
-        time.sleep(1)
-        remaining -= 1
+            print(f"\r{line}", end="", flush=True)
+            time.sleep(1)
+            remaining -= 1
+    except KeyboardInterrupt:
+        print()
+        raise
 
     print()
+
+
+def wait_until_next_check(config: WatchConfig, state: WatchState, state_file: Path) -> None:
+    scheduled_delay = state.seconds_until_scheduled_check()
+    rate_limit_delay = state.seconds_until_next_check_slot(config.max_checks_per_hour)
+    delay = max(scheduled_delay, rate_limit_delay)
+    if delay <= 0:
+        return
+
+    if scheduled_delay >= rate_limit_delay and state.next_check_at:
+        LOGGER.info(
+            "Resuming scheduled wait; next check at %s.",
+            format_scheduled_time(state.next_check_at),
+        )
+    else:
+        LOGGER.info(
+            "Hourly check cap is active; next allowed check in %s.",
+            format_duration(rate_limit_delay),
+        )
+
+    state.save(state_file)
+    sleep_with_countdown(delay)
+
+
+def close_quietly(resource: Any, label: str) -> None:
+    try:
+        resource.close()
+    except Exception as exc:  # noqa: BLE001 - cleanup should not turn Ctrl+C into a traceback
+        LOGGER.debug("Ignoring error while closing %s: %s", label, exc)
 
 
 def maybe_notify(config: WatchConfig, state: WatchState, result: CheckResult, notifiers: list[Notifier]) -> None:
@@ -538,13 +598,22 @@ def run_watch(config: WatchConfig, notifiers: list[Notifier]) -> None:
     setup_logging(config.log_file)
     state = WatchState.load(config.state_file)
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=config.headless)
-        context: BrowserContext = create_check_context(browser, config)
-        page = context.new_page()
-        try:
+    browser: Browser | None = None
+    context: BrowserContext | None = None
+
+    try:
+        wait_until_next_check(config, state, config.state_file)
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=config.headless)
+            context = create_check_context(browser, config)
+            page = context.new_page()
+
             while True:
+                wait_until_next_check(config, state, config.state_file)
+
                 try:
+                    state.clear_next_check()
                     result = check_once(page, config)
                     LOGGER.info(
                         "status=%s earliest=%s candidates=%s sources=%s notes=%s",
@@ -563,6 +632,8 @@ def run_watch(config: WatchConfig, notifiers: list[Notifier]) -> None:
                     state.save(config.state_file)
                     if result.status == "login_required":
                         LOGGER.warning("AIS session expired. Notifying user and stopping watcher.")
+                        state.clear_next_check()
+                        state.save(config.state_file)
 
                         alert = Alert(
                             title="AIS watcher stopped: login required",
@@ -600,7 +671,13 @@ def run_watch(config: WatchConfig, notifiers: list[Notifier]) -> None:
                     state.save(config.state_file)
 
                 delay = compute_delay(config, state, result)
+                state.schedule_next_check(delay)
+                state.save(config.state_file)
                 sleep_with_countdown(delay)
-        finally:
-            context.close()
-            browser.close()
+    except KeyboardInterrupt:
+        LOGGER.info("Watcher stopped by user. Next scheduled check is preserved.")
+    finally:
+        if context is not None:
+            close_quietly(context, "browser context")
+        if browser is not None:
+            close_quietly(browser, "browser")
